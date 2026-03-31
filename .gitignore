@@ -1,0 +1,18 @@
+# Variables de entorno
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Docker
+postgres_data/
+
+# VS Code
+.vscode/
+
+# pytest
+.pytest_cache/
