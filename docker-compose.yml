@@ -1,6 +1,14 @@
 services:
   api:
     build: .
+    command: >
+      sh -c "
+      until alembic upgrade head; do
+        echo 'Waiting for database and retrying migrations...';
+        sleep 2;
+      done;
+      uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+      "
     ports:
       - "8000:8000"
     volumes:
@@ -8,12 +16,18 @@ services:
     env_file:
       - .env
     depends_on:
-      - db
+      db:
+        condition: service_healthy
 
   db:
     image: postgres:16
     env_file:
       - .env
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
     ports:
       - "5432:5432"
     volumes:
