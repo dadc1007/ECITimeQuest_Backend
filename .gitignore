@@ -16,3 +16,6 @@ postgres_data/
 
 # pytest
 .pytest_cache/
+
+# Firebase
+firebase-credentials.json
