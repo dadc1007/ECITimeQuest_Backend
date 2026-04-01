@@ -57,47 +57,23 @@ def _sample_user(firebase_uid: str = "firebase-test-uid", email: str = "user@exa
 	}
 
 
-def test_register_user_success(app_client: TestClient, monkeypatch):
-	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: None)
-	monkeypatch.setattr(service, "create_user", lambda db, payload: _sample_user(payload.firebase_uid, payload.email))
-
-	response = app_client.post(
-		"/auth/register",
-		json={
-			"firebase_uid": "firebase-test-uid",
-			"email": "user@example.com",
-			"name": "Test User",
-			"subscription_plan": "free",
-		},
-	)
+def test_sync_user_success(app_client: TestClient, monkeypatch):
+	monkeypatch.setattr(service, "upsert_user_from_token", lambda db, token_payload: _sample_user())
+	response = app_client.post("/auth/sync")
 
 	assert response.status_code == 200
 	assert response.json()["email"] == "user@example.com"
 
 
-def test_register_user_already_exists(app_client: TestClient, monkeypatch):
-	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: _sample_user())
+def test_sync_user_invalid_payload_returns_400(app_client: TestClient, monkeypatch):
+	def _raise_invalid_payload(db, token_payload):
+		raise HTTPException(status_code=400, detail="Token payload missing uid or email")
 
-	response = app_client.post(
-		"/auth/register",
-		json={
-			"firebase_uid": "firebase-test-uid",
-			"email": "user@example.com",
-			"name": "Test User",
-			"subscription_plan": "free",
-		},
-	)
+	monkeypatch.setattr(service, "upsert_user_from_token", _raise_invalid_payload)
+	response = app_client.post("/auth/sync")
 
 	assert response.status_code == 400
-	assert response.json()["detail"] == "User already exists"
-
-
-def test_login_user_not_found(app_client: TestClient, monkeypatch):
-	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: None)
-	response = app_client.post("/auth/login")
-
-	assert response.status_code == 404
-	assert response.json()["detail"] == "User not found, please register first"
+	assert response.json()["detail"] == "Token payload missing uid or email"
 
 
 def test_get_me_success(app_client: TestClient, monkeypatch):
@@ -113,7 +89,7 @@ def test_get_me_user_not_found(app_client: TestClient, monkeypatch):
 	response = app_client.get("/auth/me")
 
 	assert response.status_code == 404
-	assert response.json()["detail"] == "User not found"
+	assert response.json()["detail"] == "User not found. Call /auth/sync first."
 
 
 def test_create_user_conflict_by_email():
@@ -175,12 +151,12 @@ def test_get_me_with_invalid_token_returns_401(raw_client: TestClient, monkeypat
 	assert response.json()["detail"] == "Invalid or expired token"
 
 
-def test_login_rate_limit_returns_429(app_client: TestClient, monkeypatch):
-	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: None)
+def test_sync_rate_limit_returns_429(app_client: TestClient, monkeypatch):
+	monkeypatch.setattr(service, "upsert_user_from_token", lambda db, token_payload: _sample_user())
 
 	last_status = None
 	for _ in range(20):
-		response = app_client.post("/auth/login")
+		response = app_client.post("/auth/sync")
 		last_status = response.status_code
 		if response.status_code == 429:
 			break
