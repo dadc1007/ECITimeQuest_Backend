@@ -26,6 +26,10 @@ def get_user_by_firebase_uid(db: Session, firebase_uid: str) -> User | None:
     return db.query(User).filter(User.firebase_uid == firebase_uid).first()
 
 
+def get_user_by_email(db: Session, email: str) -> User | None:
+    return db.query(User).filter(User.email == email).first()
+
+
 def upsert_user_from_token(db: Session, token_payload: dict[str, Any]) -> User:
     firebase_uid = token_payload.get("uid")
     email = token_payload.get("email")
@@ -36,6 +40,23 @@ def upsert_user_from_token(db: Session, token_payload: dict[str, Any]) -> User:
 
     user = get_user_by_firebase_uid(db, firebase_uid)
     if not user:
+        # Reconcile legacy rows created before Firebase-only auth flow.
+        user = get_user_by_email(db, email)
+        if user:
+            user.firebase_uid = firebase_uid
+            if name is not None:
+                user.name = name
+            try:
+                db.commit()
+                db.refresh(user)
+                return user
+            except IntegrityError as exc:
+                db.rollback()
+                error_message = str(exc.orig).lower() if exc.orig else ""
+                if "firebase_uid" in error_message:
+                    raise HTTPException(status_code=409, detail="Firebase UID already registered")
+                raise HTTPException(status_code=409, detail="Email already registered")
+
         return create_user(
             db,
             UserCreate(
