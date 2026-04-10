@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from uuid import uuid4
 from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI, HTTPException
@@ -130,6 +131,33 @@ def test_create_user_conflict_by_firebase_uid():
 	assert exc_info.value.status_code == 409
 	assert exc_info.value.detail == "Firebase UID already registered"
 	db.rollback.assert_called_once()
+
+
+def test_upsert_user_from_token_reconciles_existing_email(monkeypatch):
+	db = MagicMock()
+	existing = SimpleNamespace(
+		id=uuid4(),
+		firebase_uid="old-firebase-uid",
+		email="user@example.com",
+		name="Old Name",
+	)
+
+	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: None)
+	monkeypatch.setattr(service, "get_user_by_email", lambda db, email: existing)
+
+	result = service.upsert_user_from_token(
+		db,
+		{
+			"uid": "new-firebase-uid",
+			"email": "user@example.com",
+			"name": "New Name",
+		},
+	)
+
+	assert result.firebase_uid == "new-firebase-uid"
+	assert result.name == "New Name"
+	db.commit.assert_called_once()
+	db.refresh.assert_called_once_with(existing)
 
 
 def test_get_me_without_token_returns_403(raw_client: TestClient):
