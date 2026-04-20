@@ -5,7 +5,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from app.enums.enums import CoinReason
+from app.enums.enums import CoinReason, ErrorType
+from app.modules.content.models import Topic
 from app.modules.learning.models import (
     UserProgress, TopicProgress, LearningSession,
     ConceptGap, CoinTransaction, UserBadge, LearningSyncEvent
@@ -76,12 +77,23 @@ def _compute_session_outcome(data: FinishSessionRequest, available_lives: int) -
     return min(xp_gained, MAX_XP_PER_SESSION), min(coins_gained, MAX_COINS_PER_SESSION), lives_lost
 
 
-def _classify_error_type(response_time_ms: int) -> str:
+def _classify_error_type(response_time_ms: int) -> ErrorType:
     if response_time_ms <= 3000:
-        return "conceptual"
+        return ErrorType.CONCEPTUAL
     if response_time_ms <= 7000:
-        return "factual"
-    return "contextual"
+        return ErrorType.FACTUAL
+    return ErrorType.CONTEXTUAL
+
+
+def _get_topic_for_learning(db: Session, topic_id: UUID) -> Topic:
+    topic = db.query(Topic).filter(
+        Topic.id == topic_id,
+        Topic.is_active.is_(True),
+        Topic.is_published.is_(True),
+    ).first()
+    if not topic:
+        raise HTTPException(status_code=404, detail="Topic not available")
+    return topic
 
 
 def _apply_session_completion(
@@ -151,6 +163,8 @@ def start_session(db: Session, user_id: UUID, data: StartSessionRequest) -> Lear
             }
         )
 
+    _get_topic_for_learning(db, data.topic_id)
+
     session = LearningSession(user_id=user_id, topic_id=data.topic_id)
     db.add(session)
     db.commit()
@@ -165,6 +179,8 @@ def submit_answer(db: Session, user_id: UUID, session_id: UUID, data: SubmitAnsw
     ).first()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")
+    if data.session_id != session_id:
+        raise HTTPException(status_code=400, detail="session_id in path and body must match")
     if session.finished_at:
         raise HTTPException(status_code=400, detail="Session already finished")
 
@@ -219,6 +235,22 @@ def sync_offline_sessions(db: Session, user_id: UUID, data: LearningSyncRequest)
     items: list[LearningSyncItemResponse] = []
 
     for offline_session in data.sessions:
+        topic_exists = db.query(Topic).filter(
+            Topic.id == offline_session.topic_id,
+            Topic.is_active.is_(True),
+            Topic.is_published.is_(True),
+        ).first()
+        if not topic_exists:
+            skipped += 1
+            items.append(
+                LearningSyncItemResponse(
+                    client_session_id=offline_session.client_session_id,
+                    processed=False,
+                    skipped=True,
+                )
+            )
+            continue
+
         existing_event = db.query(LearningSyncEvent).filter(
             LearningSyncEvent.user_id == user_id,
             LearningSyncEvent.client_session_id == offline_session.client_session_id,
@@ -265,8 +297,26 @@ def sync_offline_sessions(db: Session, user_id: UUID, data: LearningSyncRequest)
             learning_session_id=session.id,
         )
         db.add(sync_event)
-        db.commit()
-        db.refresh(session)
+        try:
+            db.commit()
+            db.refresh(session)
+        except IntegrityError:
+            db.rollback()
+            conflict_event = db.query(LearningSyncEvent).filter(
+                LearningSyncEvent.user_id == user_id,
+                LearningSyncEvent.client_session_id == offline_session.client_session_id,
+            ).first()
+            if conflict_event:
+                skipped += 1
+                items.append(
+                    LearningSyncItemResponse(
+                        client_session_id=offline_session.client_session_id,
+                        processed=False,
+                        skipped=True,
+                    )
+                )
+                continue
+            raise
 
         processed += 1
         items.append(

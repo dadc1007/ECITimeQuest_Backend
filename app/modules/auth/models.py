@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, DateTime, String, Enum as SAEnum
 from sqlalchemy.dialects.postgresql import UUID
 from app.database import Base
-from app.enums.enums import SubscriptionPlan
+from app.enums.enums import SubscriptionPlan, UserRole
 import uuid
 
 
@@ -14,5 +14,6 @@ class User(Base):
     firebase_uid = Column(String, unique=True, nullable=False)
     email = Column(String, unique=True, nullable=False)
     name = Column(String, nullable=True)
+    role = Column(SAEnum(UserRole), default=UserRole.USER, nullable=False)
     subscription_plan = Column(SAEnum(SubscriptionPlan), default=SubscriptionPlan.FREE, nullable=False)
-    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)

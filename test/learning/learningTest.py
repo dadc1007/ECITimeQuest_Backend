@@ -356,7 +356,8 @@ def test_finish_session_requires_answers():
 def test_sync_offline_sessions_creates_session_and_progress():
 	user_id = uuid4()
 	progress = _progress(user_id)
-	db = FakeDB()
+	topic = SimpleNamespace(id=uuid4(), is_active=True, is_published=True)
+	db = FakeDB({"Topic": topic})
 
 	original_get_progress = service.get_or_create_progress
 	original_refill = service._refill_lives_if_needed
@@ -396,7 +397,8 @@ def test_sync_offline_sessions_creates_session_and_progress():
 def test_sync_offline_sessions_skips_duplicates():
 	user_id = uuid4()
 	existing_event = SimpleNamespace(id=uuid4())
-	db = FakeDB({"LearningSyncEvent": QuerySequence([existing_event])})
+	topic = SimpleNamespace(id=uuid4(), is_active=True, is_published=True)
+	db = FakeDB({"Topic": topic, "LearningSyncEvent": QuerySequence([existing_event])})
 
 	result = service.sync_offline_sessions(
 		db,

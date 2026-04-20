@@ -9,6 +9,9 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 from app.enums.enums import ErrorType, CoinReason
 
+USERS_FK = "users.id"
+TOPICS_FK = "topics.id"
+
 
 class UserProgress(Base):
     __tablename__ = "user_progress"
@@ -24,7 +27,7 @@ class UserProgress(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         unique=True,
         index=True,
@@ -64,11 +67,15 @@ class TopicProgress(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    topic_id = Column(UUID(as_uuid=True), nullable=False)
+    topic_id = Column(
+        UUID(as_uuid=True),
+            ForeignKey(TOPICS_FK, ondelete="CASCADE"),
+        nullable=False,
+    )
 
     completion_percentage = Column(Float, default=0.0, nullable=False)
     xp_earned = Column(Integer, default=0, nullable=False)
@@ -98,12 +105,16 @@ class LearningSession(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
 
-    topic_id = Column(UUID(as_uuid=True), nullable=False)
+    topic_id = Column(
+        UUID(as_uuid=True),
+            ForeignKey(TOPICS_FK, ondelete="CASCADE"),
+        nullable=False,
+    )
     xp_gained = Column(Integer, default=0, nullable=False)
     coins_gained = Column(Integer, default=0, nullable=False)
     lives_lost = Column(Integer, default=0, nullable=False)
@@ -126,11 +137,15 @@ class ConceptGap(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    topic_id = Column(UUID(as_uuid=True), nullable=False)
+    topic_id = Column(
+        UUID(as_uuid=True),
+            ForeignKey(TOPICS_FK, ondelete="CASCADE"),
+        nullable=False,
+    )
     concept = Column(String, nullable=False)
     error_type = Column(SAEnum(ErrorType), nullable=False)
     weakness_score = Column(Float, default=0.5, nullable=False)
@@ -149,7 +164,7 @@ class CoinTransaction(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -166,7 +181,7 @@ class UserBadge(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
@@ -182,12 +197,17 @@ class LearningSyncEvent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     user_id = Column(
         UUID(as_uuid=True),
-        ForeignKey("users.id", ondelete="CASCADE"),
+            ForeignKey(USERS_FK, ondelete="CASCADE"),
         nullable=False,
         index=True,
     )
-    client_session_id = Column(UUID(as_uuid=True), nullable=False, unique=True, index=True)
-    topic_id = Column(UUID(as_uuid=True), nullable=False, index=True)
+    client_session_id = Column(UUID(as_uuid=True), nullable=False, unique=True)
+    topic_id = Column(
+        UUID(as_uuid=True),
+            ForeignKey(TOPICS_FK, ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
     learning_session_id = Column(
         UUID(as_uuid=True),
         ForeignKey("learning_sessions.id", ondelete="CASCADE"),

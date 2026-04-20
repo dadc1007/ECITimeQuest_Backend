@@ -6,6 +6,11 @@ class SubscriptionPlan(str, Enum):
     PREMIUM = "premium"
 
 
+class UserRole(str, Enum):
+    USER = "user"
+    ADMIN = "admin"
+
+
 class ErrorType(str, Enum):
     FACTUAL = "factual"
     CONCEPTUAL = "conceptual"
