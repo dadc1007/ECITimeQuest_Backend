@@ -53,6 +53,7 @@ def _sample_user(firebase_uid: str = "firebase-test-uid", email: str = "user@exa
 		"firebase_uid": firebase_uid,
 		"email": email,
 		"name": "Test User",
+		"role": "user",
 		"subscription_plan": "free",
 		"created_at": datetime.now(timezone.utc).isoformat(),
 	}
@@ -160,6 +161,31 @@ def test_upsert_user_from_token_reconciles_existing_email(monkeypatch):
 	db.refresh.assert_called_once_with(existing)
 
 
+def test_upsert_user_from_token_does_not_demote_admin_when_role_missing(monkeypatch):
+	db = MagicMock()
+	existing = SimpleNamespace(
+		id=uuid4(),
+		firebase_uid="firebase-test-uid",
+		email="user@example.com",
+		name="Admin User",
+		role="admin",
+	)
+
+	monkeypatch.setattr(service, "get_user_by_firebase_uid", lambda db, uid: existing)
+
+	result = service.upsert_user_from_token(
+		db,
+		{
+			"uid": "firebase-test-uid",
+			"email": "user@example.com",
+			"name": "Admin User",
+		},
+	)
+
+	assert result.role == "admin"
+	db.commit.assert_not_called()
+
+
 def test_get_me_without_token_returns_403(raw_client: TestClient):
 	response = raw_client.get("/auth/me")
 
@@ -190,3 +216,81 @@ def test_sync_rate_limit_returns_429(app_client: TestClient, monkeypatch):
 			break
 
 	assert last_status == 429
+
+
+def test_update_user_role_cannot_demote_last_admin(monkeypatch):
+	db = MagicMock()
+	admin_id = uuid4()
+	admin_user = SimpleNamespace(id=admin_id, role="admin")
+
+	monkeypatch.setattr(service, "get_user_by_id", lambda db, user_id: admin_user)
+	monkeypatch.setattr(service, "_count_admin_users", lambda db: 1)
+
+	with pytest.raises(HTTPException) as exc_info:
+		service.update_user_role(db, admin_id, service.UserRole.USER)
+
+	assert exc_info.value.status_code == 400
+	assert exc_info.value.detail == "Cannot demote the last admin"
+
+
+def test_update_user_role_success_for_admin(app_client: TestClient, monkeypatch):
+	admin_id = str(uuid4())
+	target_id = str(uuid4())
+
+	def _get_user_by_firebase_uid(db, uid):
+		return SimpleNamespace(id=admin_id, role="admin")
+
+	def _update_user_role(db, user_id, role):
+		return {
+			"id": str(user_id),
+			"email": "target@example.com",
+			"name": "Target User",
+			"role": role.value,
+			"subscription_plan": "free",
+			"created_at": datetime.now(timezone.utc).isoformat(),
+		}
+
+	monkeypatch.setattr(service, "get_user_by_firebase_uid", _get_user_by_firebase_uid)
+	monkeypatch.setattr(service, "update_user_role", _update_user_role)
+
+	response = app_client.patch(
+		f"/auth/users/{target_id}/role",
+		json={"role": "admin"},
+	)
+
+	assert response.status_code == 200
+	assert response.json()["role"] == "admin"
+
+
+def test_update_user_role_forbidden_for_non_admin(app_client: TestClient, monkeypatch):
+	def _get_user_by_firebase_uid(db, uid):
+		return SimpleNamespace(id=uuid4(), role="user")
+
+	monkeypatch.setattr(service, "get_user_by_firebase_uid", _get_user_by_firebase_uid)
+
+	response = app_client.patch(
+		f"/auth/users/{uuid4()}/role",
+		json={"role": "admin"},
+	)
+
+	assert response.status_code == 403
+	assert response.json()["detail"] == "Admin role required"
+
+
+def test_update_user_role_not_found(app_client: TestClient, monkeypatch):
+	def _get_user_by_firebase_uid(db, uid):
+		return SimpleNamespace(id=uuid4(), role="admin")
+
+	def _raise_not_found(db, user_id, role):
+		raise HTTPException(status_code=404, detail="User not found")
+
+	monkeypatch.setattr(service, "get_user_by_firebase_uid", _get_user_by_firebase_uid)
+	monkeypatch.setattr(service, "update_user_role", _raise_not_found)
+
+	response = app_client.patch(
+		f"/auth/users/{uuid4()}/role",
+		json={"role": "user"},
+	)
+
+	assert response.status_code == 404
+	assert response.json()["detail"] == "User not found"

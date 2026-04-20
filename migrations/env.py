@@ -7,6 +7,7 @@ from app.config import settings
 from app.database import Base
 import app.modules.auth.models  # noqa: F401
 import app.modules.learning.models  # noqa: F401
+import app.modules.content.models  # noqa: F401
 
 
 config = context.config
