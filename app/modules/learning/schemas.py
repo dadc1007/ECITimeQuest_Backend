@@ -41,6 +41,7 @@ class StartSessionRequest(BaseModel):
 class SubmitAnswerRequest(BaseModel):
     session_id: UUID
     question_id: UUID
+    concept: str = Field(..., min_length=2)
     answer: str = Field(min_length=1)
     response_time_ms: int = Field(ge=0)
     is_correct: bool

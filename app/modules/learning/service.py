@@ -195,7 +195,7 @@ def submit_answer(db: Session, user_id: UUID, session_id: UUID, data: SubmitAnsw
             user_id,
             ConceptGapCreate(
                 topic_id=session.topic_id,
-                concept=f"question:{data.question_id}",
+                concept=data.concept,
                 error_type=_classify_error_type(data.response_time_ms),
                 weakness_score=0.6,
                 avg_response_time_ms=data.response_time_ms,
@@ -339,8 +339,17 @@ def _update_topic_progress(db: Session, user_id: UUID, topic_id: UUID, xp_gained
     ).first()
 
     if not topic_progress:
-        topic_progress = TopicProgress(user_id=user_id, topic_id=topic_id)
-        db.add(topic_progress)
+        try:
+            with db.begin_nested():
+                topic_progress = TopicProgress(user_id=user_id, topic_id=topic_id)
+                db.add(topic_progress)
+                db.flush()
+        except IntegrityError:
+            # If concurrent request already created it, fetch it
+            topic_progress = db.query(TopicProgress).filter(
+                TopicProgress.user_id == user_id,
+                TopicProgress.topic_id == topic_id
+            ).first()
 
     if topic_progress.xp_earned is None:
         topic_progress.xp_earned = 0
@@ -408,3 +417,21 @@ def _check_and_award_badges(db: Session, user_id: UUID, progress: UserProgress) 
     for badge_name, condition in BADGE_CONDITIONS.items():
         if badge_name not in existing and condition(progress):
             db.add(UserBadge(user_id=user_id, badge_name=badge_name))
+
+def get_learning_context_for_ai(db: Session, user_id: UUID, topic_id: UUID) -> dict:
+    """
+    Returns a dictionary with the user's learning context for AI personalization.
+    """
+    progress = get_or_create_progress(db, user_id)
+    gaps = db.query(ConceptGap).filter(
+        ConceptGap.user_id == user_id,
+        ConceptGap.topic_id == topic_id
+    ).order_by(ConceptGap.weakness_score.desc()).limit(3).all()
+    
+    return {
+        "user_level": progress.level,
+        "concept_gaps": [
+            f"{gap.concept} (Severity: {gap.weakness_score:.2f})"
+            for gap in gaps
+        ]
+    }

@@ -1,14 +1,17 @@
 from pathlib import Path
-
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 class Settings(BaseSettings):
     DATABASE_URL: str
     FIREBASE_CREDENTIALS_PATH: str
+    OPENAI_API_KEY: str = ""
+    REDIS_URL: str = "redis://localhost:6379/2"
+    CELERY_BROKER_URL: str = "redis://localhost:6379/0"
+    CELERY_RESULT_BACKEND: str = "redis://localhost:6379/1"
 
     @field_validator("FIREBASE_CREDENTIALS_PATH", mode="before")
     @classmethod
@@ -22,5 +25,6 @@ class Settings(BaseSettings):
         env_file=PROJECT_ROOT / ".env",
         extra="ignore",
     )
+
 
 settings = Settings()
