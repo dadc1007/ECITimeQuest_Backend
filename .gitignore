@@ -15,6 +15,11 @@ postgres_data/
 .vscode/
 
 # pytest
+.coverage
+htmlcov/
+nosetests.xml
+coverage.xml
+*.cover
 .pytest_cache/
 
 # Firebase
