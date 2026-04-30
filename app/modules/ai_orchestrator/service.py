@@ -9,6 +9,7 @@ from app.modules.ai_orchestrator.registry import AITaskRegistry
 from app.modules.ai_orchestrator.services.redis_cache import get_redis_cache
 from app.modules.ai_orchestrator.services.prompt_engine import PROMPT_VERSIONS
 from app.modules.ai_orchestrator.schemas import (
+    AITaskPayload,
     AITaskRequest,
     AITaskResponse,
     LearningContextDTO,
@@ -19,18 +20,20 @@ logger = logging.getLogger(__name__)
 
 
 class AIOrchestratorService:
-    def _enrich_learning_context(self, db: Session, request: AITaskRequest) -> None:
-        """Enriches the request with the user's learning context."""
+    def _fetch_learning_context(
+        self, db: Session, user_id: str, reference_id: str
+    ) -> Optional[LearningContextDTO]:
+        """Fetches and returns the user's learning context. Returns None on failure."""
         try:
             learning_facade = LearningFacade(db)
             context_dict = learning_facade.get_user_learning_context(
-                user_id=request.user_id, topic_id=request.reference_id
+                user_id=user_id, topic_id=reference_id
             )
-
             if context_dict:
-                request.learning_context = LearningContextDTO(**context_dict)
+                return LearningContextDTO(**context_dict)
         except Exception:
-            request.learning_context = None
+            pass
+        return None
 
     def _validate_request(self, request: AITaskRequest) -> Optional[AITaskResponse]:
         """Validates that required fields are present and correct."""
@@ -43,45 +46,50 @@ class AIOrchestratorService:
                 status="failed",
                 error="The 'context' field is required and cannot be empty.",
             )
-        if not hasattr(request, "learning_context") or request.learning_context is None:
-            return AITaskResponse(
-                status="failed",
-                error="The 'learning_context' field is required and cannot be empty.",
-            )
         return None
 
     def __init__(self):
         self.redis_cache = get_redis_cache()
 
-    def _get_cache_key(self, request: AITaskRequest) -> str:
+    def _get_cache_key(
+        self,
+        request: AITaskRequest,
+        user_id: str,
+        learning_context: Optional[LearningContextDTO],
+    ) -> str:
         """Centralized cache key generation using semantic hashing."""
-        context_str = json.dumps(
-            request.learning_context.model_dump() if request.learning_context else {},
-            sort_keys=True,
-        )
+        combined_context = {
+            "task_context": request.context,
+            "learning_context": (
+                learning_context.model_dump() if learning_context else {}
+            ),
+        }
+        context_str = json.dumps(combined_context, sort_keys=True)
         context_hash = hashlib.sha256(context_str.encode("utf-8")).hexdigest()[:12]
         version = PROMPT_VERSIONS.get(request.task_type, "v1")
 
-        return f"ai:cache:{version}:{request.task_type}:{request.reference_id}:{request.user_id}:{context_hash}"
+        return f"ai:cache:{version}:{request.task_type}:{request.reference_id}:{user_id}:{context_hash}"
 
     def process_task_request(
-        self, db: Session, request: AITaskRequest
+        self, db: Session, request: AITaskRequest, user_id: Optional[str] = None
     ) -> AITaskResponse:
         """
         Handles incoming task requests efficiently:
-        1. Enriches the request with User Learning Context using LearningFacade.
+        1. Fetches the User Learning Context using LearningFacade.
         2. Returns cached final data if available (using hash-based caching).
         3. Returns existing task_id if another worker is already processing it.
         4. Enqueues a new Celery task and locks it in Redis.
         """
-        self._enrich_learning_context(db, request)
+        learning_context = self._fetch_learning_context(
+            db, user_id, request.reference_id
+        )
 
         # Validate required fields
         validation_error = self._validate_request(request)
         if validation_error:
             logger.debug("Validation failed for request")
             return validation_error
-        cache_key = self._get_cache_key(request)
+        cache_key = self._get_cache_key(request, user_id, learning_context)
 
         # 1. Check if the final result is already cached
         cached_data = self.redis_cache.get(cache_key)
@@ -98,29 +106,22 @@ class AIOrchestratorService:
             logger.debug("The task is already processing, returning existing task_id.")
             return AITaskResponse(status="processing", task_id=existing_task_id)
 
-        # Prepare learning context
-        learning_context_dict = (
-            request.learning_context
-            if isinstance(request.learning_context, dict)
-            else (
-                request.learning_context.model_dump()
-                if request.learning_context
-                else None
-            )
-        )
-
         try:
             task_func = AITaskRegistry.get_task(request.task_type)
         except ValueError as e:
             return AITaskResponse(status="failed", error=str(e))
 
-        task = task_func.delay(
+        payload = AITaskPayload(
             reference_id=request.reference_id,
-            user_id=request.user_id,
+            user_id=user_id,
             context=request.context,
-            learning_context=learning_context_dict,
             cache_key=cache_key,
+            learning_context=(
+                learning_context.model_dump() if learning_context else None
+            ),
         )
+
+        task = task_func.delay(payload.model_dump())
 
         # 5. Mark as processing to prevent duplicate tasks
         # TTL of 300 seconds (5 minutes) to avoid deadlocks if a worker crashes

@@ -30,8 +30,8 @@ def request_ai_task(
     """
     try:
         user = _get_user(current_user, db)
-        request.user_id = str(user.id)
-        response = orchestrator_service.process_task_request(db, request)
+        user_id = str(user.id)
+        response = orchestrator_service.process_task_request(db, request, user_id)
 
         return response
     except HTTPException:

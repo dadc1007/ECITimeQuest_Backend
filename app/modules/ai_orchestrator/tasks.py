@@ -4,6 +4,9 @@ from typing import Dict, Any
 from pydantic import ValidationError
 from openai import RateLimitError, APIConnectionError
 from app.modules.ai_orchestrator.schemas import (
+    AITaskPayload,
+    AnswerExplanationContext,
+    AnswerExplanationGeneratedResponse,
     LearningContextDTO,
     PersonalizedQuizContext,
     TopicContext,
@@ -21,6 +24,7 @@ from app.modules.ai_orchestrator.services.prompt_engine import (
     build_personalized_quiz_prompt,
     build_gap_analysis_prompt,
     build_content_expansion_prompt,
+    build_answer_explanation_prompt,
 )
 from app.modules.ai_orchestrator.registry import AITaskRegistry
 
@@ -52,39 +56,36 @@ def _validate_and_return(result: dict, response_model, cache_key: str):
     retry_kwargs={"max_retries": 3},
     name="ai_orchestrator.generate_quiz",
 )
-def generate_quiz_task(
-    self,
-    reference_id: str,
-    user_id: str,
-    context: Dict[str, Any],
-    learning_context: Dict[str, Any],
-    cache_key: str = "",
-) -> Dict[str, Any]:
+def generate_quiz_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Generates a quiz for a specific topic.
     Saves the result in the domain cache.
     """
+    p = AITaskPayload(**payload)
     logger.info(
-        f"Starting generate_quiz_task for reference_id: {reference_id}, user_id: {user_id}"
+        f"Starting generate_quiz_task for reference_id: {p.reference_id}, user_id: {p.user_id}"
     )
 
     try:
-        quiz_ctx = PersonalizedQuizContext(**context)
-        learning_ctx = LearningContextDTO(**learning_context)
+        quiz_ctx = PersonalizedQuizContext(**p.context)
+        learning_ctx = LearningContextDTO(**(p.learning_context or {}))
         system_prompt, user_prompt = build_personalized_quiz_prompt(
             quiz_ctx, learning_ctx
         )
+
         logger.debug(
-            f"Calling OpenAI for topic {context.get('topic_name', 'Unknown Topic')}"
-        )
-        result = generate_structured_json(system_prompt, user_prompt)
-        logger.info(
-            f"Successfully generated and cached quiz for {reference_id} / {user_id}"
+            f"Calling OpenAI for topic {p.context.get('topic_name', 'Unknown Topic')}"
         )
 
-        return _validate_and_return(result, QuizGeneratedResponse, cache_key)
+        result = generate_structured_json(system_prompt, user_prompt)
+
+        logger.info(
+            f"Successfully generated and cached quiz for {p.reference_id} / {p.user_id}"
+        )
+
+        return _validate_and_return(result, QuizGeneratedResponse, p.cache_key)
     except Exception as e:
-        logger.error(f"Error in generate_quiz_task for {reference_id}: {str(e)}")
+        logger.error(f"Error in generate_quiz_task for {p.reference_id}: {str(e)}")
         raise self.retry(exc=e)
 
 
@@ -101,43 +102,38 @@ def generate_quiz_task(
     retry_kwargs={"max_retries": 3},
     name="ai_orchestrator.analyze_gaps",
 )
-def analyze_gaps_task(
-    self,
-    reference_id: str,
-    user_id: str,
-    context: Dict[str, Any],
-    learning_context: Dict[str, Any],
-    cache_key: str = "",
-) -> Dict[str, Any]:
+def analyze_gaps_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Analyzes student errors to identify core concept gaps.
     Saves the result in the domain cache.
     """
+    p = AITaskPayload(**payload)
+
     logger.info(
-        f"Starting analyze_gaps_task for reference: {reference_id}, user: {user_id}"
+        f"Starting analyze_gaps_task for reference: {p.reference_id}, user: {p.user_id}"
     )
 
     try:
-        topic_ctx = TopicContext(**context)
-        learning_ctx = LearningContextDTO(**learning_context)
+        topic_ctx = TopicContext(**p.context)
+        learning_ctx = LearningContextDTO(**(p.learning_context or {}))
 
         # If there are no gaps, skip the AI call and return empty result immediately
         if not learning_ctx.concept_gaps:
             logger.info(
-                f"No gaps found in learning_ctx for {reference_id} / {user_id}, skipping AI call."
+                f"No gaps found in learning_ctx for {p.reference_id} / {p.user_id}, skipping AI call."
             )
             return _validate_and_return(
-                {"concept_gaps": []}, GapAnalysisGeneratedResponse, cache_key
+                {"concept_gaps": []}, GapAnalysisGeneratedResponse, p.cache_key
             )
 
         system_prompt, user_prompt = build_gap_analysis_prompt(topic_ctx, learning_ctx)
         logger.debug("Calling OpenAI for gap analysis")
         result = generate_structured_json(system_prompt, user_prompt)
-        logger.info(f"Successfully analyzed gaps for {reference_id} / {user_id}")
+        logger.info(f"Successfully analyzed gaps for {p.reference_id} / {p.user_id}")
 
-        return _validate_and_return(result, GapAnalysisGeneratedResponse, cache_key)
+        return _validate_and_return(result, GapAnalysisGeneratedResponse, p.cache_key)
     except Exception as e:
-        logger.error(f"Error in analyze_gaps_task for {reference_id}: {str(e)}")
+        logger.error(f"Error in analyze_gaps_task for {p.reference_id}: {str(e)}")
         raise self.retry(exc=e)
 
 
@@ -154,33 +150,74 @@ def analyze_gaps_task(
     retry_kwargs={"max_retries": 3},
     name="ai_orchestrator.expand_content",
 )
-def expand_content_task(
-    self,
-    reference_id: str,
-    user_id: str,
-    context: Dict[str, Any],
-    learning_context: Dict[str, Any],
-    cache_key: str = "",
-) -> Dict[str, Any]:
+def expand_content_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     Expands on a historical figure or event to provide more lore/details.
     """
+    p = AITaskPayload(**payload)
+
     logger.info(
-        f"Starting expand_content_task for reference: {reference_id}, user: {user_id}"
+        f"Starting expand_content_task for reference: {p.reference_id}, user: {p.user_id}"
     )
 
     try:
-        topic_ctx = TopicContext(**context)
-        learning_ctx = LearningContextDTO(**learning_context)
+        topic_ctx = TopicContext(**p.context)
+        learning_ctx = LearningContextDTO(**(p.learning_context or {}))
         system_prompt, user_prompt = build_content_expansion_prompt(
             topic_ctx, learning_ctx
         )
         result = generate_structured_json(system_prompt, user_prompt)
-        logger.info(f"Successfully expanded content for {reference_id} / {user_id}")
+        logger.info(f"Successfully expanded content for {p.reference_id} / {p.user_id}")
 
         return _validate_and_return(
-            result, ContentExpansionGeneratedResponse, cache_key
+            result, ContentExpansionGeneratedResponse, p.cache_key
         )
     except Exception as e:
-        logger.error(f"Error in expand_content_task for {reference_id}: {str(e)}")
+        logger.error(f"Error in expand_content_task for {p.reference_id}: {str(e)}")
+        raise self.retry(exc=e)
+
+
+@AITaskRegistry.register("answer_explanation")
+@celery_app.task(
+    bind=True,
+    autoretry_for=(
+        RateLimitError,
+        APIConnectionError,
+        LLMGatewayException,
+        ValidationError,
+    ),
+    retry_backoff=True,
+    retry_kwargs={"max_retries": 3},
+    name="ai_orchestrator.explain_answer",
+)
+def explain_answer_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Explains why a quiz answer is incorrect and provides targeted feedback.
+    Receives: question, user_answer (wrong), correct_answer, topic_name.
+    Returns: explanation, key_concept, tip.
+
+    Note: learning_context is intentionally not used by this task.
+    The AITaskPayload contract carries it for architectural consistency,
+    but answer feedback does not require user profiling.
+    """
+    p = AITaskPayload(**payload)
+
+    logger.info(
+        f"Starting explain_answer_task for reference: {p.reference_id}, user: {p.user_id}"
+    )
+
+    try:
+        answer_ctx = AnswerExplanationContext(**p.context)
+        system_prompt, user_prompt = build_answer_explanation_prompt(answer_ctx)
+        result = generate_structured_json(system_prompt, user_prompt)
+
+        logger.info(
+            f"Successfully generated answer explanation for {p.reference_id} / {p.user_id}"
+        )
+
+        return _validate_and_return(
+            result, AnswerExplanationGeneratedResponse, p.cache_key
+        )
+    except Exception as e:
+        logger.error(f"Error in explain_answer_task for {p.reference_id}: {str(e)}")
         raise self.retry(exc=e)

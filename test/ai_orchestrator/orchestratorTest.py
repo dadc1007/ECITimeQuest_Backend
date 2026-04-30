@@ -3,10 +3,11 @@ Tests for the AI Orchestrator module.
 
 Coverage:
 - AITaskRegistry (register, get_task, duplicate detection)
-- Prompt Engine (build_personalized_quiz_prompt, build_gap_analysis_prompt, build_content_expansion_prompt)
+- Prompt Engine (all 4 builders including build_answer_explanation_prompt)
 - analyze_gaps_task logic (empty gaps early return, LLM call, validation)
 - generate_quiz_task logic (success, LLM failure)
 - expand_content_task logic (success, LLM failure)
+- explain_answer_task logic (success, LLM failure, prompt builder)
 - LLMGateway (success, rate limit, api error, json decode error, empty response)
 - AIOrchestratorService (cache hit, in-progress deduplication, new task dispatch,
   ValueError on unknown task, learning context enrichment exception, get_task_status branches)
@@ -27,6 +28,7 @@ from app.database import get_db
 from app.modules.ai_orchestrator.registry import AITaskRegistry
 from app.modules.ai_orchestrator.router import router
 from app.modules.ai_orchestrator.schemas import (
+    AITaskPayload,
     AITaskRequest,
     LearningContextDTO,
     PersonalizedQuizContext,
@@ -124,8 +126,8 @@ def raw_client() -> TestClient:
 
 class TestAITaskRegistry:
     def test_registered_tasks_contain_all_types(self):
-        """All three core task types must be discoverable after module load."""
-        for task_type in ("quiz_generation", "gap_analysis", "content_expansion"):
+        """All four task types must be discoverable after module load."""
+        for task_type in ("quiz_generation", "gap_analysis", "content_expansion", "answer_explanation"):
             task = AITaskRegistry.get_task(task_type)
             assert callable(task)
 
@@ -268,15 +270,14 @@ class TestAnalyzeGapsTaskLogic:
 
         from app.modules.ai_orchestrator.tasks import analyze_gaps_task
 
-        result = analyze_gaps_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 2, "concept_gaps": []},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 2, "concept_gaps": []},
+            cache_key="",
         )
+        result = analyze_gaps_task.apply(args=[payload.model_dump()])
 
         assert result.successful()
         assert result.result["concept_gaps"] == []
@@ -304,15 +305,14 @@ class TestAnalyzeGapsTaskLogic:
 
         from app.modules.ai_orchestrator.tasks import analyze_gaps_task
 
-        result = analyze_gaps_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 2, "concept_gaps": ["Feudalism"]},
-                "cache_key": "test-key",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 2, "concept_gaps": ["Feudalism"]},
+            cache_key="test-key",
         )
+        result = analyze_gaps_task.apply(args=[payload.model_dump()])
 
         assert result.successful()
         data = result.result
@@ -333,15 +333,14 @@ class TestAnalyzeGapsTaskLogic:
 
         from app.modules.ai_orchestrator.tasks import analyze_gaps_task
 
-        result = analyze_gaps_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 2, "concept_gaps": ["Feudalism"]},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 2, "concept_gaps": ["Feudalism"]},
+            cache_key="",
         )
+        result = analyze_gaps_task.apply(args=[payload.model_dump()])
 
         assert result.failed()
 
@@ -363,7 +362,6 @@ class TestAIOrchestratorService:
         return AITaskRequest(
             task_type=task_type,
             reference_id=TOPIC_ID,
-            user_id=USER_ID,
             context={
                 "topic_name": "The Crusades",
                 "topic_description": "Medieval campaigns.",
@@ -371,7 +369,6 @@ class TestAIOrchestratorService:
                 "events": [],
                 "figures": [],
             },
-            learning_context=LearningContextDTO(user_level=2, concept_gaps=[]),
         )
 
     def test_returns_cached_result_when_available(self, monkeypatch):
@@ -392,7 +389,7 @@ class TestAIOrchestratorService:
         db_mock = MagicMock()
         request = self._base_request()
 
-        response = service.process_task_request(db_mock, request)
+        response = service.process_task_request(db_mock, request, USER_ID)
 
         assert response.status == "completed"
         assert response.source == "cache"
@@ -417,7 +414,7 @@ class TestAIOrchestratorService:
         db_mock = MagicMock()
         request = self._base_request()
 
-        response = service.process_task_request(db_mock, request)
+        response = service.process_task_request(db_mock, request, USER_ID)
 
         assert response.status == "processing"
         assert response.task_id == existing_task_id
@@ -447,7 +444,7 @@ class TestAIOrchestratorService:
         db_mock = MagicMock()
         request = self._base_request()
 
-        response = service.process_task_request(db_mock, request)
+        response = service.process_task_request(db_mock, request, USER_ID)
 
         assert response.status == "processing"
         assert response.task_id == fake_task_id
@@ -470,48 +467,13 @@ class TestAIOrchestratorService:
         request = AITaskRequest(
             task_type="gap_analysis",
             reference_id=TOPIC_ID,
-            user_id=USER_ID,
             context={},  # empty context triggers validation error
-            learning_context=LearningContextDTO(user_level=2, concept_gaps=[]),
         )
 
-        response = service.process_task_request(db_mock, request)
+        response = service.process_task_request(db_mock, request, USER_ID)
 
         assert response.status == "failed"
         assert "context" in response.error.lower()
-
-    def test_returns_failed_when_learning_context_missing(self, monkeypatch):
-        redis_mock = MagicMock()
-        monkeypatch.setattr(
-            "app.modules.ai_orchestrator.service.LearningFacade",
-            MagicMock(
-                return_value=MagicMock(
-                    get_user_learning_context=MagicMock(return_value=None)
-                )
-            ),
-        )
-
-        service = self._make_service(redis_mock)
-        db_mock = MagicMock()
-
-        request = AITaskRequest(
-            task_type="gap_analysis",
-            reference_id=TOPIC_ID,
-            user_id=USER_ID,
-            context={
-                "topic_name": "The Crusades",
-                "topic_description": "Medieval campaigns.",
-                "period_name": "Middle Ages",
-                "events": [],
-                "figures": [],
-            },
-            learning_context=None,
-        )
-
-        response = service.process_task_request(db_mock, request)
-
-        assert response.status == "failed"
-        assert "learning_context" in response.error.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +489,7 @@ class TestAITaskRouter:
         monkeypatch.setattr(AUTH_LOOKUP_PATH, lambda db, uid: _fake_user())
         monkeypatch.setattr(
             "app.modules.ai_orchestrator.router.orchestrator_service.process_task_request",
-            lambda db, req: MagicMock(
+            lambda db, req, user_id: MagicMock(
                 status="processing",
                 task_id=fake_task_id,
                 source=None,
@@ -727,8 +689,8 @@ class TestAIOrchestratorServiceExtra:
         ):
             return AIOrchestratorService()
 
-    def test_enrich_learning_context_catches_exception_and_sets_none(self, monkeypatch):
-        """If LearningFacade raises, learning_context must be set to None silently."""
+    def test_fetch_learning_context_returns_none_on_exception(self, monkeypatch):
+        """If LearningFacade raises, _fetch_learning_context must return None silently."""
         monkeypatch.setattr(
             "app.modules.ai_orchestrator.service.LearningFacade",
             MagicMock(side_effect=Exception("DB connection error")),
@@ -737,23 +699,11 @@ class TestAIOrchestratorServiceExtra:
         service = self._make_service(redis_mock)
         db_mock = MagicMock()
 
-        request = AITaskRequest(
-            task_type="gap_analysis",
-            reference_id=TOPIC_ID,
-            user_id=USER_ID,
-            context={
-                "topic_name": "X",
-                "topic_description": "Y",
-                "period_name": "Z",
-                "events": [],
-                "figures": [],
-            },
-        )
-        service._enrich_learning_context(db_mock, request)
+        result = service._fetch_learning_context(db_mock, USER_ID, TOPIC_ID)
 
-        assert request.learning_context is None
+        assert result is None
 
-    def test_enrich_learning_context_populates_when_facade_returns_data(
+    def test_fetch_learning_context_returns_dto_when_facade_returns_data(
         self, monkeypatch
     ):
         """When LearningFacade returns a context dict, it is parsed into LearningContextDTO."""
@@ -770,23 +720,11 @@ class TestAIOrchestratorServiceExtra:
         service = self._make_service(redis_mock)
         db_mock = MagicMock()
 
-        request = AITaskRequest(
-            task_type="gap_analysis",
-            reference_id=TOPIC_ID,
-            user_id=USER_ID,
-            context={
-                "topic_name": "X",
-                "topic_description": "Y",
-                "period_name": "Z",
-                "events": [],
-                "figures": [],
-            },
-        )
-        service._enrich_learning_context(db_mock, request)
+        result = service._fetch_learning_context(db_mock, USER_ID, TOPIC_ID)
 
-        assert request.learning_context is not None
-        assert request.learning_context.user_level == 5
-        assert "Feudalism" in request.learning_context.concept_gaps
+        assert result is not None
+        assert result.user_level == 5
+        assert "Feudalism" in result.concept_gaps
 
     def test_returns_failed_when_registry_raises_value_error(self, monkeypatch):
         """If the registry raises ValueError, service must return a failed response."""
@@ -810,7 +748,6 @@ class TestAIOrchestratorServiceExtra:
         request = AITaskRequest(
             task_type="gap_analysis",
             reference_id=TOPIC_ID,
-            user_id=USER_ID,
             context={
                 "topic_name": "X",
                 "topic_description": "Y",
@@ -818,10 +755,9 @@ class TestAIOrchestratorServiceExtra:
                 "events": [],
                 "figures": [],
             },
-            learning_context=LearningContextDTO(user_level=2, concept_gaps=[]),
         )
 
-        response = service.process_task_request(db_mock, request)
+        response = service.process_task_request(db_mock, request, USER_ID)
 
         assert response.status == "failed"
         assert "Unknown task type" in response.error
@@ -922,15 +858,14 @@ class TestGenerateQuizTask:
 
         from app.modules.ai_orchestrator.tasks import generate_quiz_task
 
-        result = generate_quiz_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 2, "concept_gaps": []},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 2, "concept_gaps": []},
+            cache_key="",
         )
+        result = generate_quiz_task.apply(args=[payload.model_dump()])
 
         assert result.successful()
         assert len(result.result["questions"]) == 1
@@ -949,15 +884,14 @@ class TestGenerateQuizTask:
 
         from app.modules.ai_orchestrator.tasks import generate_quiz_task
 
-        result = generate_quiz_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 2, "concept_gaps": []},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 2, "concept_gaps": []},
+            cache_key="",
         )
+        result = generate_quiz_task.apply(args=[payload.model_dump()])
 
         assert result.failed()
 
@@ -992,15 +926,14 @@ class TestExpandContentTask:
 
         from app.modules.ai_orchestrator.tasks import expand_content_task
 
-        result = expand_content_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 3, "concept_gaps": []},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 3, "concept_gaps": []},
+            cache_key="",
         )
+        result = expand_content_task.apply(args=[payload.model_dump()])
 
         assert result.successful()
         assert result.result["content"]["summary"] is not None
@@ -1019,15 +952,14 @@ class TestExpandContentTask:
 
         from app.modules.ai_orchestrator.tasks import expand_content_task
 
-        result = expand_content_task.apply(
-            kwargs={
-                "reference_id": TOPIC_ID,
-                "user_id": USER_ID,
-                "context": self._context(),
-                "learning_context": {"user_level": 3, "concept_gaps": []},
-                "cache_key": "",
-            }
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            learning_context={"user_level": 3, "concept_gaps": []},
+            cache_key="",
         )
+        result = expand_content_task.apply(args=[payload.model_dump()])
 
         assert result.failed()
 
@@ -1135,3 +1067,97 @@ class TestLLMGateway:
 
         with pytest.raises(RateLimitError):
             generate_structured_json("system", "user")
+
+
+# ---------------------------------------------------------------------------
+# 9. explain_answer_task Tests
+# ---------------------------------------------------------------------------
+
+
+class TestExplainAnswerTask:
+    def _context(self) -> dict:
+        return {
+            "question": "In what year did the First Crusade begin?",
+            "user_answer": "1066",
+            "correct_answer": "1096",
+            "topic_name": "The First Crusade",
+        }
+
+    def test_success_returns_explanation_feedback(self, monkeypatch):
+        """explain_answer_task must call the LLM and return explanation, key_concept and tip."""
+        fake_llm_result = {
+            "explanation": (
+                "1066 is the year of the Battle of Hastings, not the First Crusade. "
+                "The First Crusade began in 1096 after Pope Urban II's call."
+            ),
+            "key_concept": "First Crusade Timeline",
+            "tip": "Remember: 1096 for the Crusade, 1066 for Hastings.",
+        }
+        monkeypatch.setattr(
+            "app.modules.ai_orchestrator.tasks.generate_structured_json",
+            lambda sys_p, usr_p: fake_llm_result,
+        )
+        monkeypatch.setattr(
+            "app.modules.ai_orchestrator.tasks.get_redis_cache",
+            lambda: MagicMock(setex=MagicMock()),
+        )
+
+        from app.modules.ai_orchestrator.tasks import explain_answer_task
+
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            cache_key="",
+        )
+        result = explain_answer_task.apply(args=[payload.model_dump()])
+
+        assert result.successful()
+        data = result.result
+        assert "explanation" in data
+        assert "key_concept" in data
+        assert "tip" in data
+        assert "First Crusade" in data["key_concept"]
+
+    def test_llm_error_marks_task_as_failed(self, monkeypatch):
+        """explain_answer_task must fail when the LLM raises an exception."""
+        monkeypatch.setattr(
+            "app.modules.ai_orchestrator.tasks.generate_structured_json",
+            MagicMock(side_effect=Exception("LLM timeout")),
+        )
+        monkeypatch.setattr(
+            "app.modules.ai_orchestrator.tasks.get_redis_cache",
+            lambda: MagicMock(setex=MagicMock()),
+        )
+
+        from app.modules.ai_orchestrator.tasks import explain_answer_task
+
+        payload = AITaskPayload(
+            reference_id=TOPIC_ID,
+            user_id=USER_ID,
+            context=self._context(),
+            cache_key="",
+        )
+        result = explain_answer_task.apply(args=[payload.model_dump()])
+
+        assert result.failed()
+
+    def test_prompt_builder_includes_question_and_answers(self):
+        """build_answer_explanation_prompt must embed all 4 context fields in the user prompt."""
+        from app.modules.ai_orchestrator.schemas import AnswerExplanationContext
+        from app.modules.ai_orchestrator.services.prompt_engine import (
+            build_answer_explanation_prompt,
+        )
+
+        ctx = AnswerExplanationContext(
+            question="When did the First Crusade start?",
+            user_answer="1066",
+            correct_answer="1096",
+            topic_name="The First Crusade",
+        )
+        system_p, user_p = build_answer_explanation_prompt(ctx)
+
+        assert isinstance(system_p, str) and len(system_p) > 0
+        assert "1066" in user_p
+        assert "1096" in user_p
+        assert "When did the First Crusade start?" in user_p

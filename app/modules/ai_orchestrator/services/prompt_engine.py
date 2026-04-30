@@ -1,10 +1,11 @@
 from app.modules.ai_orchestrator.schemas import (
+    AnswerExplanationContext,
     LearningContextDTO,
     PersonalizedQuizContext,
     TopicContext,
 )
 
-PROMPT_VERSIONS = {"quiz": "v2", "gap_analysis": "v1", "content_expansion": "v1"}
+PROMPT_VERSIONS = {"quiz": "v2", "gap_analysis": "v1", "content_expansion": "v1", "answer_explanation": "v1"}
 
 
 def _truncate(text: str, max_length: int = 100) -> str:
@@ -95,7 +96,8 @@ def build_personalized_quiz_prompt(
         "'options' (array of exactly 4 strings), "
         "'correct_index' (integer 0-3 indicating the correct option), "
         "'concept' (string, a short 2-5 word name for the specific historical concept being tested, e.g. 'Causes of the Revolution' or 'Key Dates').\n\n"
-        "CRITICAL RULE: All questions MUST be strictly answerable using ONLY the information provided in the Historical Context below. Do NOT introduce external facts or ask about details not mentioned.\n\n"
+        "CRITICAL RULE: All questions MUST be strictly answerable using ONLY the information provided in the Historical Context below. Do NOT introduce external facts or ask about details not mentioned.\n"
+        "LANGUAGE RULE: ALL text fields in your JSON response (questions, options, concept) MUST be written in Spanish.\n\n"
         f"{historical_context}"
     )
     user_prompt = (
@@ -133,7 +135,8 @@ def build_gap_analysis_prompt(
         "Each gap object must have: "
         "'concept' (string, the core topic they are failing at), "
         "'explanation' (string, brief explanation of why they might be confused), "
-        "'severity' (string: 'low', 'medium', or 'high').\n\n"
+        "'severity' (string: 'low', 'medium', or 'high').\n"
+        "LANGUAGE RULE: ALL text fields in your JSON response (concept, explanation) MUST be written in Spanish.\n\n"
         f"{historical_context}"
     )
     user_prompt = (
@@ -171,7 +174,8 @@ def build_content_expansion_prompt(
         "The 'content' object must have: "
         "'summary' (string, 2 paragraphs max), "
         "'key_facts' (array of strings), "
-        "'fun_fact' (string).\n\n"
+        "'fun_fact' (string).\n"
+        "LANGUAGE RULE: ALL text fields in your JSON response (summary, key_facts, fun_fact) MUST be written in Spanish.\n\n"
         f"{historical_context}"
     )
     user_prompt = f"Provide an engaging expansion for the {context.period_name} of {context.topic_name}'. Make sure the expansion is coherent with the overarching historical background provided.\n"
@@ -185,6 +189,44 @@ def build_content_expansion_prompt(
 
     print("\n" + "=" * 50)
     print("=== CONTENT EXPANSION PROMPTS ===")
+    print("SYSTEM PROMPT:")
+    print(system_prompt)
+    print("\nUSER PROMPT:")
+    print(user_prompt)
+    print("=" * 50 + "\n")
+
+    return system_prompt, user_prompt
+
+
+def build_answer_explanation_prompt(
+    context: AnswerExplanationContext,
+) -> tuple[str, str]:
+    """
+    Builds the system and user prompts for explaining why a quiz answer is incorrect.
+    Does not require learning context or historical context — only the question and answers.
+    Returns: (system_prompt, user_prompt)
+    """
+    system_prompt = (
+        "You are a friendly and encouraging history tutor helping a student understand "
+        "why their quiz answer was incorrect. "
+        "Output a strictly valid JSON object with exactly three fields: "
+        "'explanation' (string: 2-3 sentences clearly explaining why the selected answer is wrong "
+        "and what the correct answer actually means in its historical context), "
+        "'key_concept' (string: 3-7 words naming the core historical concept being tested), "
+        "'tip' (string: one short, memorable sentence to help the student remember the correct answer).\n"
+        "Be encouraging, concise, and factually accurate. Do not mention the word 'incorrect' more than once.\n"
+        "LANGUAGE RULE: ALL text fields in your JSON response (explanation, key_concept, tip) MUST be written in Spanish."
+    )
+    user_prompt = (
+        f"Topic: {context.topic_name}\n"
+        f"Question: {context.question}\n"
+        f"The student selected: \"{context.user_answer}\"\n"
+        f"The correct answer is: \"{context.correct_answer}\"\n\n"
+        "Please explain why the student's answer is wrong and help them understand the correct one."
+    )
+
+    print("\n" + "=" * 50)
+    print("=== ANSWER EXPLANATION PROMPTS ===")
     print("SYSTEM PROMPT:")
     print(system_prompt)
     print("\nUSER PROMPT:")
