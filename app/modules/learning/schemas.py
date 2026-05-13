@@ -22,6 +22,27 @@ class UserProgressResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+# ── Era / Period Progress ─────────────────────────────────
+
+class EraTopicProgressItem(BaseModel):
+    topic_id: UUID
+    name: str
+    completion_percentage: float
+    xp_earned: int
+
+
+class EraProgressResponse(BaseModel):
+    period_id: UUID
+    period_name: str
+    topics_count: int
+    topics_completed: int
+    xp_total: int
+    avg_completion: float
+    topics: list[EraTopicProgressItem] | None = None
+
+    model_config = {"from_attributes": True}
+
+
 # ── TopicProgress ─────────────────────────────────────────
 class TopicProgressResponse(BaseModel):
     id: UUID
@@ -115,6 +136,7 @@ class ConceptGapResponse(BaseModel):
     id: UUID
     user_id: UUID
     topic_id: UUID
+    topic_name: Optional[str] = None
     concept: str
     error_type: ErrorType
     weakness_score: float

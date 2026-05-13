@@ -618,8 +618,10 @@ def test_router_get_gaps_and_badges_routes(app_client: TestClient, monkeypatch):
 	monkeypatch.setattr(learning_router, "get_user_by_firebase_uid", lambda db, uid: user)
 
 	db = MagicMock()
+	# Simulate three queries: ConceptGap, Topic (id,name), UserBadge
 	db.query.side_effect = [
 		MagicMock(filter=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[gap])))),
+		MagicMock(filter=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[(gap.topic_id, "Topic X")])))),
 		MagicMock(filter=MagicMock(return_value=MagicMock(all=MagicMock(return_value=[badge])))),
 	]
 
@@ -635,3 +637,29 @@ def test_router_get_gaps_and_badges_routes(app_client: TestClient, monkeypatch):
 	assert badges_response.status_code == 200
 	assert gaps_response.json()[0]["id"] == str(gap.id)
 	assert badges_response.json()[0]["id"] == str(badge.id)
+
+
+def test_router_get_period_progress_success(app_client: TestClient, monkeypatch):
+	user = _user()
+	period_id = uuid4()
+	sample = {
+		"period_id": str(period_id),
+		"period_name": "Ancient Era",
+		"topics_count": 2,
+		"topics_completed": 1,
+		"xp_total": 150,
+		"avg_completion": 50.0,
+		"topics": [
+			{"topic_id": str(uuid4()), "name": "Topic A", "completion_percentage": 100.0, "xp_earned": 100},
+			{"topic_id": str(uuid4()), "name": "Topic B", "completion_percentage": 0.0, "xp_earned": 50},
+		],
+	}
+
+	monkeypatch.setattr(learning_router.service, "get_progress_by_period", lambda db, user_id, pid, include_topics=True: sample)
+	monkeypatch.setattr(learning_router, "get_user_by_firebase_uid", lambda db, uid: user)
+
+	response = app_client.get(f"/learning/periods/{period_id}/progress")
+
+	assert response.status_code == 200
+	assert response.json()["period_name"] == "Ancient Era"
+	assert response.json()["topics_count"] == 2

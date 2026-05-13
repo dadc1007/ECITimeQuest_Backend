@@ -125,6 +125,24 @@ def get_topic_progress(
     return progress
 
 
+
+@router.get("/periods/{period_id}/progress", response_model=schemas.EraProgressResponse, responses={
+    401: {"description": "Invalid or expired token"},
+    404: {"description": "Period not found"},
+})
+@limiter.limit("30/minute")
+def get_period_progress(
+    request: Request,
+    period_id: UUID,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = _get_user(current_user, db)
+    # service will raise or return empty if no topics
+    result = service.get_progress_by_period(db, user.id, period_id, include_topics=True)
+    return result
+
+
 # ── ConceptGap ────────────────────────────────────────────
 
 @router.get("/gaps", response_model=list[schemas.ConceptGapResponse], responses={
@@ -139,7 +157,40 @@ def get_concept_gaps(
 ):
     user = _get_user(current_user, db)
     from app.modules.learning.models import ConceptGap
-    return db.query(ConceptGap).filter(ConceptGap.user_id == user.id).all()
+    from app.modules.content.models import Topic
+
+    gaps = db.query(ConceptGap).filter(ConceptGap.user_id == user.id).all()
+
+    # Try to fetch topic names in batch to avoid N+1 queries
+    topic_ids = [g.topic_id for g in gaps]
+    topic_map = {}
+    if topic_ids:
+        rows = db.query(Topic.id, Topic.name).filter(Topic.id.in_(topic_ids)).all()
+        # rows may be list of tuples (id,name)
+        for r in rows:
+            try:
+                tid, tname = r
+            except Exception:
+                continue
+            topic_map[tid] = tname
+
+    result = []
+    for g in gaps:
+        # if gap already exposes topic name (in tests or models), prefer it
+        tname = getattr(g, "topic_name", None) or topic_map.get(g.topic_id)
+        result.append({
+            "id": g.id,
+            "user_id": g.user_id,
+            "topic_id": g.topic_id,
+            "topic_name": tname,
+            "concept": g.concept,
+            "error_type": g.error_type,
+            "weakness_score": g.weakness_score,
+            "avg_response_time_ms": g.avg_response_time_ms,
+            "detected_at": g.detected_at,
+        })
+
+    return result
 
 
 # ── Coins ─────────────────────────────────────────────────

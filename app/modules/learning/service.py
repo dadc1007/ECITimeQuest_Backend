@@ -435,3 +435,70 @@ def get_learning_context_for_ai(db: Session, user_id: UUID, topic_id: UUID) -> d
             for gap in gaps
         ]
     }
+
+
+def get_progress_by_period(db: Session, user_id: UUID, period_id: UUID, include_topics: bool = True) -> dict:
+    """
+    Aggregate user's progress for all topics belonging to a historical period.
+    Returns a dict with totals and optional per-topic items.
+    """
+    topics = db.query(Topic).filter(
+        Topic.period_id == period_id,
+        Topic.is_active.is_(True),
+        Topic.is_published.is_(True),
+    ).all()
+
+    topic_ids = [t.id for t in topics]
+
+    if not topic_ids:
+        return {
+            "period_id": period_id,
+            "period_name": db.query(Topic).filter(Topic.period_id == period_id).first().period.name if topics else "",
+            "topics_count": 0,
+            "topics_completed": 0,
+            "xp_total": 0,
+            "avg_completion": 0.0,
+            "topics": [] if include_topics else None,
+        }
+
+    progresses = db.query(TopicProgress).filter(
+        TopicProgress.user_id == user_id,
+        TopicProgress.topic_id.in_(topic_ids),
+    ).all()
+
+    progress_map = {p.topic_id: p for p in progresses}
+
+    xp_total = sum((p.xp_earned or 0) for p in progresses)
+    completions = [float(progress_map.get(tid).completion_percentage if progress_map.get(tid) else 0.0) for tid in topic_ids]
+    avg_completion = float(sum(completions) / len(completions)) if completions else 0.0
+    topics_completed = sum(1 for c in completions if c >= 100.0)
+
+    items = None
+    if include_topics:
+        items = []
+        for t in topics:
+            p = progress_map.get(t.id)
+            items.append({
+                "topic_id": t.id,
+                "name": t.name,
+                "completion_percentage": float(p.completion_percentage) if p else 0.0,
+                "xp_earned": int(p.xp_earned) if p else 0,
+            })
+
+    # Retrieve period name if possible
+    period_name = ""
+    if topics:
+        try:
+            period_name = topics[0].period.name
+        except Exception:
+            period_name = ""
+
+    return {
+        "period_id": period_id,
+        "period_name": period_name,
+        "topics_count": len(topic_ids),
+        "topics_completed": topics_completed,
+        "xp_total": int(xp_total),
+        "avg_completion": avg_completion,
+        "topics": items,
+    }
