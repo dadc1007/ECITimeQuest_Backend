@@ -43,6 +43,15 @@ class EraProgressResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EraMasteryItemResponse(BaseModel):
+    period_id: UUID
+    period_name: str
+    mastery_percentage: float
+    topics_count: int
+    topics_completed: int
+    xp_total: int
+
+
 # ── TopicProgress ─────────────────────────────────────────
 class TopicProgressResponse(BaseModel):
     id: UUID

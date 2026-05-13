@@ -55,6 +55,17 @@ class FakeDB:
 		self.commit = MagicMock()
 		self.refresh = MagicMock()
 		self.rollback = MagicMock()
+		self.flush = MagicMock()
+
+	def begin_nested(self):
+		class _Tx:
+			def __enter__(self_inner):
+				return self_inner
+
+			def __exit__(self_inner, exc_type, exc, tb):
+				return False
+
+		return _Tx()
 
 	def query(self, model):
 		key = model.__name__
@@ -222,6 +233,7 @@ def test_submit_answer_correct_returns_rewards():
 		SubmitAnswerRequest(
 			session_id=session.id,
 			question_id=uuid4(),
+			concept="timeline",
 			answer="answer",
 			response_time_ms=1200,
 			is_correct=True,
@@ -248,6 +260,7 @@ def test_submit_answer_wrong_creates_concept_gap():
 		SubmitAnswerRequest(
 			session_id=session.id,
 			question_id=uuid4(),
+			concept="timeline",
 			answer="wrong",
 			response_time_ms=9000,
 			is_correct=False,
@@ -273,6 +286,7 @@ def test_submit_answer_session_not_found():
 			SubmitAnswerRequest(
 				session_id=uuid4(),
 				question_id=uuid4(),
+				concept="timeline",
 				answer="x",
 				response_time_ms=1000,
 				is_correct=True,
@@ -564,7 +578,7 @@ def test_router_submit_answer_success(app_client: TestClient, monkeypatch):
 
 	response = app_client.post(
 		f"/learning/sessions/{session.id}/answers",
-		json={"session_id": str(session.id), "question_id": str(uuid4()), "answer": "ans", "response_time_ms": 1000, "is_correct": True},
+		json={"session_id": str(session.id), "question_id": str(uuid4()), "concept": "timeline", "answer": "ans", "response_time_ms": 1000, "is_correct": True},
 	)
 
 	assert response.status_code == 200
@@ -578,7 +592,7 @@ def test_router_submit_answer_not_found(app_client: TestClient, monkeypatch):
 
 	response = app_client.post(
 		f"/learning/sessions/{uuid4()}/answers",
-		json={"session_id": str(uuid4()), "question_id": str(uuid4()), "answer": "ans", "response_time_ms": 1000, "is_correct": True},
+		json={"session_id": str(uuid4()), "question_id": str(uuid4()), "concept": "timeline", "answer": "ans", "response_time_ms": 1000, "is_correct": True},
 	)
 
 	assert response.status_code == 404
@@ -663,3 +677,29 @@ def test_router_get_period_progress_success(app_client: TestClient, monkeypatch)
 	assert response.status_code == 200
 	assert response.json()["period_name"] == "Ancient Era"
 	assert response.json()["topics_count"] == 2
+
+
+def test_router_get_periods_mastery_success(app_client: TestClient, monkeypatch):
+	user = _user()
+	period_id = uuid4()
+	mastery = [
+		{
+			"period_id": str(period_id),
+			"period_name": "Historia Antigua",
+			"mastery_percentage": 90.0,
+			"topics_count": 5,
+			"topics_completed": 3,
+			"xp_total": 420,
+		}
+	]
+
+	monkeypatch.setattr(learning_router.service, "get_periods_mastery", lambda db, user_id: mastery)
+	monkeypatch.setattr(learning_router, "get_user_by_firebase_uid", lambda db, uid: user)
+
+	response = app_client.get("/learning/periods/mastery")
+
+	assert response.status_code == 200
+	assert len(response.json()) == 1
+	assert response.json()[0]["period_name"] == "Historia Antigua"
+	assert response.json()[0]["mastery_percentage"] == 90.0
+

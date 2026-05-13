@@ -103,6 +103,19 @@ def finish_session(
 
 # ── TopicProgress ─────────────────────────────────────────
 
+@router.get("/periods/mastery", response_model=list[schemas.EraMasteryItemResponse], responses={
+    401: {"description": "Invalid or expired token"},
+    404: {"description": "User not found"},
+})
+@limiter.limit("30/minute")
+def get_periods_mastery(
+    request: Request,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    db: Annotated[Session, Depends(get_db)],
+):
+    user = _get_user(current_user, db)
+    return service.get_periods_mastery(db, user.id)
+
 @router.get("/topics/{topic_id}/progress", response_model=schemas.TopicProgressResponse, responses={
     401: {"description": "Invalid or expired token"},
     404: {"description": "Topic progress not found"},

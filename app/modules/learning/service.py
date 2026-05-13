@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
 from app.enums.enums import CoinReason, ErrorType
-from app.modules.content.models import Topic
+from app.modules.content.models import Topic, HistoricalPeriod
 from app.modules.learning.models import (
     UserProgress, TopicProgress, LearningSession,
     ConceptGap, CoinTransaction, UserBadge, LearningSyncEvent
@@ -502,3 +502,75 @@ def get_progress_by_period(db: Session, user_id: UUID, period_id: UUID, include_
         "avg_completion": avg_completion,
         "topics": items,
     }
+
+
+def get_periods_mastery(db: Session, user_id: UUID) -> list[dict]:
+    """
+    Returns one item per period with aggregated mastery stats.
+    Mastery is the average topic completion percentage for that period.
+    """
+    periods = db.query(HistoricalPeriod).filter(
+        HistoricalPeriod.is_active.is_(True),
+        HistoricalPeriod.is_published.is_(True),
+    ).order_by(HistoricalPeriod.order.asc()).all()
+
+    if not periods:
+        return []
+
+    period_ids = [p.id for p in periods]
+    topics = db.query(Topic).filter(
+        Topic.period_id.in_(period_ids),
+        Topic.is_active.is_(True),
+        Topic.is_published.is_(True),
+    ).all()
+
+    topic_ids = [t.id for t in topics]
+    progresses: list[TopicProgress] = []
+    if topic_ids:
+        progresses = db.query(TopicProgress).filter(
+            TopicProgress.user_id == user_id,
+            TopicProgress.topic_id.in_(topic_ids),
+        ).all()
+
+    progress_map = {p.topic_id: p for p in progresses}
+    topics_by_period: dict[UUID, list[Topic]] = {}
+    for t in topics:
+        topics_by_period.setdefault(t.period_id, []).append(t)
+
+    result: list[dict] = []
+    for period in periods:
+        period_topics = topics_by_period.get(period.id, [])
+        if not period_topics:
+            result.append({
+                "period_id": period.id,
+                "period_name": period.name,
+                "mastery_percentage": 0.0,
+                "topics_count": 0,
+                "topics_completed": 0,
+                "xp_total": 0,
+            })
+            continue
+
+        completions: list[float] = []
+        xp_total = 0
+        topics_completed = 0
+
+        for topic in period_topics:
+            topic_progress = progress_map.get(topic.id)
+            completion = float(topic_progress.completion_percentage) if topic_progress else 0.0
+            completions.append(completion)
+            if completion >= 100.0:
+                topics_completed += 1
+            xp_total += int(topic_progress.xp_earned) if topic_progress else 0
+
+        mastery_percentage = float(sum(completions) / len(completions)) if completions else 0.0
+        result.append({
+            "period_id": period.id,
+            "period_name": period.name,
+            "mastery_percentage": mastery_percentage,
+            "topics_count": len(period_topics),
+            "topics_completed": topics_completed,
+            "xp_total": xp_total,
+        })
+
+    return result
