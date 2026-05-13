@@ -201,6 +201,8 @@ def submit_answer(db: Session, user_id: UUID, session_id: UUID, data: SubmitAnsw
                 avg_response_time_ms=data.response_time_ms,
             ),
         )
+    else:
+        remove_concept_gap(db, user_id, session.topic_id, data.concept)
 
     return AnswerSubmitResponse(
         session_id=session_id,
@@ -401,6 +403,21 @@ def upsert_concept_gap(db: Session, user_id: UUID, data: ConceptGapCreate) -> Co
     db.commit()
     db.refresh(gap)
     return gap
+
+
+def remove_concept_gap(db: Session, user_id: UUID, topic_id: UUID, concept: str) -> bool:
+    gap = db.query(ConceptGap).filter(
+        ConceptGap.user_id == user_id,
+        ConceptGap.topic_id == topic_id,
+        ConceptGap.concept == concept,
+    ).first()
+
+    if not gap:
+        return False
+
+    db.delete(gap)
+    db.commit()
+    return True
 
 
 

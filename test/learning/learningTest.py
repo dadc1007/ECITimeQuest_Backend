@@ -52,6 +52,7 @@ class FakeDB:
 	def __init__(self, results=None):
 		self.results = results or {}
 		self.add = MagicMock()
+		self.delete = MagicMock()
 		self.commit = MagicMock()
 		self.refresh = MagicMock()
 		self.rollback = MagicMock()
@@ -246,6 +247,33 @@ def test_submit_answer_correct_returns_rewards():
 	assert result.lives_lost == 0
 	assert result.feedback == "Correct answer"
 	assert db.add.call_count == 0
+
+
+def test_submit_answer_correct_removes_resolved_gap():
+	user_id = uuid4()
+	topic_id = uuid4()
+	session = _session(user_id, topic_id)
+	existing_gap = _gap(user_id, topic_id)
+	existing_gap.concept = "timeline"
+	db = FakeDB({"LearningSession": session, "ConceptGap": existing_gap})
+
+	result = service.submit_answer(
+		db,
+		user_id,
+		session.id,
+		SubmitAnswerRequest(
+			session_id=session.id,
+			question_id=uuid4(),
+			concept="timeline",
+			answer="answer",
+			response_time_ms=1200,
+			is_correct=True,
+		),
+	)
+
+	assert result.is_correct is True
+	db.delete.assert_called_once_with(existing_gap)
+	assert db.commit.call_count >= 1
 
 
 def test_submit_answer_wrong_creates_concept_gap():
