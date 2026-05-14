@@ -4,6 +4,8 @@ from uuid import UUID, uuid4
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy import func
+import logging
 
 from app.enums.enums import CoinReason, ErrorType
 from app.modules.content.models import Topic, HistoricalPeriod
@@ -83,6 +85,8 @@ def _classify_error_type(response_time_ms: int) -> ErrorType:
     if response_time_ms <= 7000:
         return ErrorType.FACTUAL
     return ErrorType.CONTEXTUAL
+
+logger = logging.getLogger(__name__)
 
 
 def _get_topic_for_learning(db: Session, topic_id: UUID) -> Topic:
@@ -189,20 +193,27 @@ def submit_answer(db: Session, user_id: UUID, session_id: UUID, data: SubmitAnsw
     lives_lost = 0 if data.is_correct else 1
     feedback = "Correct answer" if data.is_correct else "Review this concept and try again"
 
+    # normalize concept to avoid whitespace/case mismatches
+    concept_norm = (data.concept or "").strip()
     if not data.is_correct:
         upsert_concept_gap(
             db,
             user_id,
             ConceptGapCreate(
                 topic_id=session.topic_id,
-                concept=data.concept,
+                concept=concept_norm,
                 error_type=_classify_error_type(data.response_time_ms),
                 weakness_score=0.6,
                 avg_response_time_ms=data.response_time_ms,
             ),
         )
     else:
-        remove_concept_gap(db, user_id, session.topic_id, data.concept)
+        try:
+            removed = remove_concept_gap(db, user_id, session.topic_id, concept_norm)
+            if removed:
+                logger.debug("Removed resolved gap: user=%s topic=%s concept=%s", user_id, session.topic_id, concept_norm)
+        except Exception:
+            logger.exception("Error removing gap for user=%s topic=%s concept=%s", user_id, session.topic_id, concept_norm)
 
     return AnswerSubmitResponse(
         session_id=session_id,
@@ -385,14 +396,18 @@ def spend_coins(db: Session, user_id: UUID, amount: int, reason: CoinReason) -> 
 
 
 def upsert_concept_gap(db: Session, user_id: UUID, data: ConceptGapCreate) -> ConceptGap:
+    # normalize concept for storage and comparison
+    concept_norm = (data.concept or "").strip()
     gap = db.query(ConceptGap).filter(
         ConceptGap.user_id == user_id,
         ConceptGap.topic_id == data.topic_id,
-        ConceptGap.concept == data.concept
+        func.lower(ConceptGap.concept) == func.lower(concept_norm),
     ).first()
 
     if not gap:
-        gap = ConceptGap(user_id=user_id, **data.model_dump())
+        payload = data.model_dump()
+        payload["concept"] = concept_norm
+        gap = ConceptGap(user_id=user_id, **payload)
         db.add(gap)
     else:
         gap.weakness_score = data.weakness_score
@@ -406,10 +421,11 @@ def upsert_concept_gap(db: Session, user_id: UUID, data: ConceptGapCreate) -> Co
 
 
 def remove_concept_gap(db: Session, user_id: UUID, topic_id: UUID, concept: str) -> bool:
+    concept_norm = (concept or "").strip()
     gap = db.query(ConceptGap).filter(
         ConceptGap.user_id == user_id,
         ConceptGap.topic_id == topic_id,
-        ConceptGap.concept == concept,
+        func.lower(ConceptGap.concept) == func.lower(concept_norm),
     ).first()
 
     if not gap:
