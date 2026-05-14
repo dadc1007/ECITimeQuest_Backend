@@ -52,6 +52,21 @@ class EraMasteryItemResponse(BaseModel):
     xp_total: int
 
 
+class LearningHomeSummaryEraResponse(BaseModel):
+    period_id: UUID
+    period_name: str
+    last_studied_at: datetime
+    completion_percentage: float
+
+    model_config = {"from_attributes": True}
+
+
+class LearningHomeSummaryResponse(BaseModel):
+    last_studied_era: Optional[LearningHomeSummaryEraResponse] = None
+    completed_eras_count: int
+    total_eras_count: int
+
+
 # ── TopicProgress ─────────────────────────────────────────
 class TopicProgressResponse(BaseModel):
     id: UUID

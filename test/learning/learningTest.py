@@ -24,6 +24,9 @@ from app.modules.learning.schemas import (
 )
 
 
+HISTORIA_ANTIGUA = "Historia Antigua"
+
+
 class QuerySequence(list):
 	pass
 
@@ -33,6 +36,9 @@ class FakeQuery:
 		self.result = result
 
 	def filter(self, *args, **kwargs):
+		return self
+
+	def order_by(self, *args, **kwargs):
 		return self
 
 	def first(self):
@@ -713,7 +719,7 @@ def test_router_get_periods_mastery_success(app_client: TestClient, monkeypatch)
 	mastery = [
 		{
 			"period_id": str(period_id),
-			"period_name": "Historia Antigua",
+			"period_name": HISTORIA_ANTIGUA,
 			"mastery_percentage": 90.0,
 			"topics_count": 5,
 			"topics_completed": 3,
@@ -728,6 +734,61 @@ def test_router_get_periods_mastery_success(app_client: TestClient, monkeypatch)
 
 	assert response.status_code == 200
 	assert len(response.json()) == 1
-	assert response.json()[0]["period_name"] == "Historia Antigua"
-	assert response.json()[0]["mastery_percentage"] == 90.0
+	assert response.json()[0]["period_name"] == HISTORIA_ANTIGUA
+	assert response.json()[0]["mastery_percentage"] == pytest.approx(90.0)
+
+
+def test_get_home_summary_computes_last_studied_era_and_completed_count():
+	user_id = uuid4()
+	period_id = uuid4()
+	latest_progress = SimpleNamespace(
+		id=uuid4(),
+		user_id=user_id,
+		topic_id=uuid4(),
+		completion_percentage=100.0,
+		xp_earned=120,
+		last_studied_at=datetime.now(timezone.utc),
+	)
+	topic = SimpleNamespace(id=latest_progress.topic_id, period_id=period_id, is_active=True, is_published=True)
+	period = SimpleNamespace(id=period_id, name=HISTORIA_ANTIGUA, is_active=True, is_published=True)
+	db = FakeDB({"TopicProgress": latest_progress, "Topic": topic, "HistoricalPeriod": period})
+
+	original_get_periods_mastery = service.get_periods_mastery
+	service.get_periods_mastery = lambda db, uid: [
+		{"period_id": period_id, "period_name": HISTORIA_ANTIGUA, "mastery_percentage": 100.0, "topics_count": 3, "topics_completed": 3, "xp_total": 360},
+		{"period_id": uuid4(), "period_name": "Edad Media", "mastery_percentage": 50.0, "topics_count": 2, "topics_completed": 1, "xp_total": 120},
+	]  # type: ignore[assignment]
+	try:
+		result = service.get_home_summary(db, user_id)
+	finally:
+		service.get_periods_mastery = original_get_periods_mastery  # type: ignore[assignment]
+
+	assert result["completed_eras_count"] == 1
+	assert result["total_eras_count"] == 2
+	assert result["last_studied_era"]["period_name"] == HISTORIA_ANTIGUA
+	assert result["last_studied_era"]["completion_percentage"] == pytest.approx(100.0)
+
+
+def test_router_get_home_summary_success(app_client: TestClient, monkeypatch):
+	user = _user()
+	period_id = uuid4()
+	sample = {
+		"last_studied_era": {
+			"period_id": str(period_id),
+			"period_name": HISTORIA_ANTIGUA,
+			"last_studied_at": datetime.now(timezone.utc).isoformat(),
+			"completion_percentage": 88.5,
+		},
+		"completed_eras_count": 2,
+		"total_eras_count": 5,
+	}
+
+	monkeypatch.setattr(learning_router.service, "get_home_summary", lambda db, user_id: sample)
+	monkeypatch.setattr(learning_router, "get_user_by_firebase_uid", lambda db, uid: user)
+
+	response = app_client.get("/learning/home-summary")
+
+	assert response.status_code == 200
+	assert response.json()["completed_eras_count"] == 2
+	assert response.json()["last_studied_era"]["period_name"] == HISTORIA_ANTIGUA
 

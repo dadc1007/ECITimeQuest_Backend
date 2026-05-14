@@ -608,3 +608,55 @@ def get_periods_mastery(db: Session, user_id: UUID) -> list[dict]:
         })
 
     return result
+
+
+def get_home_summary(db: Session, user_id: UUID) -> dict:
+    """
+    Returns the home summary for the user, including the last studied era
+    and the number of completed eras.
+    """
+    periods_mastery = get_periods_mastery(db, user_id)
+    completed_eras_count = sum(
+        1
+        for period in periods_mastery
+        if period["topics_count"] > 0 and period["topics_completed"] >= period["topics_count"]
+    )
+    total_eras_count = sum(1 for period in periods_mastery if period["topics_count"] > 0)
+
+    latest_topic_progress = (
+        db.query(TopicProgress)
+        .filter(
+            TopicProgress.user_id == user_id,
+            TopicProgress.last_studied_at.isnot(None),
+        )
+        .order_by(TopicProgress.last_studied_at.desc())
+        .first()
+    )
+
+    last_studied_era = None
+    if latest_topic_progress:
+        topic = db.query(Topic).filter(
+            Topic.id == latest_topic_progress.topic_id,
+            Topic.is_active.is_(True),
+            Topic.is_published.is_(True),
+        ).first()
+        if topic:
+            period = db.query(HistoricalPeriod).filter(
+                HistoricalPeriod.id == topic.period_id,
+                HistoricalPeriod.is_active.is_(True),
+                HistoricalPeriod.is_published.is_(True),
+            ).first()
+            if period:
+                period_progress = get_progress_by_period(db, user_id, period.id, include_topics=False)
+                last_studied_era = {
+                    "period_id": period.id,
+                    "period_name": period.name,
+                    "last_studied_at": latest_topic_progress.last_studied_at,
+                    "completion_percentage": period_progress["avg_completion"],
+                }
+
+    return {
+        "last_studied_era": last_studied_era,
+        "completed_eras_count": completed_eras_count,
+        "total_eras_count": total_eras_count,
+    }
