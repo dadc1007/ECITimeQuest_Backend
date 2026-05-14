@@ -45,6 +45,13 @@ class TopicContext(BaseModel):
     )
 
 
+class GapAnalysisContext(TopicContext):
+    target_concept: str = Field(
+        ...,
+        description="The specific concept to analyze as a gap",
+    )
+
+
 class LearningContextDTO(BaseModel):
     user_level: int = Field(
         ..., description="The current proficiency level of the user (1-5)"
@@ -89,21 +96,15 @@ class QuizGeneratedResponse(BaseModel):
     )
 
 
-class ConceptGap(BaseModel):
+class GapAnalysisResponse(BaseModel):
     concept: str = Field(
         ..., description="The historical concept the user is struggling with"
     )
     explanation: str = Field(
         ..., description="An explanation of the detected misunderstanding"
     )
-    severity: Literal["low", "medium", "high"] = Field(
+    severity: Literal["bajo", "medio", "alto"] = Field(
         ..., description="The severity of the conceptual gap"
-    )
-
-
-class GapAnalysisGeneratedResponse(BaseModel):
-    concept_gaps: List[ConceptGap] = Field(
-        ..., description="A list of analyzed conceptual gaps"
     )
 
 

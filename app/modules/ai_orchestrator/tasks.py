@@ -10,8 +10,9 @@ from app.modules.ai_orchestrator.schemas import (
     LearningContextDTO,
     PersonalizedQuizContext,
     TopicContext,
+    GapAnalysisContext,
     QuizGeneratedResponse,
-    GapAnalysisGeneratedResponse,
+    GapAnalysisResponse,
     ContentExpansionGeneratedResponse,
 )
 from app.workers.celery_app import celery_app
@@ -104,7 +105,7 @@ def generate_quiz_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
 )
 def analyze_gaps_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Analyzes student errors to identify core concept gaps.
+    Analyzes a specific concept gap to identify why the student is struggling.
     Saves the result in the domain cache.
     """
     p = AITaskPayload(**payload)
@@ -114,24 +115,18 @@ def analyze_gaps_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
     )
 
     try:
-        topic_ctx = TopicContext(**p.context)
+        gap_ctx = GapAnalysisContext(**p.context)
         learning_ctx = LearningContextDTO(**(p.learning_context or {}))
+        system_prompt, user_prompt = build_gap_analysis_prompt(gap_ctx, learning_ctx)
 
-        # If there are no gaps, skip the AI call and return empty result immediately
-        if not learning_ctx.concept_gaps:
-            logger.info(
-                f"No gaps found in learning_ctx for {p.reference_id} / {p.user_id}, skipping AI call."
-            )
-            return _validate_and_return(
-                {"concept_gaps": []}, GapAnalysisGeneratedResponse, p.cache_key
-            )
+        logger.debug(
+            f"Calling OpenAI for gap analysis of concept: {gap_ctx.target_concept}"
+        )
 
-        system_prompt, user_prompt = build_gap_analysis_prompt(topic_ctx, learning_ctx)
-        logger.debug("Calling OpenAI for gap analysis")
         result = generate_structured_json(system_prompt, user_prompt)
-        logger.info(f"Successfully analyzed gaps for {p.reference_id} / {p.user_id}")
+        logger.info(f"Successfully analyzed gap for {p.reference_id} / {p.user_id}")
 
-        return _validate_and_return(result, GapAnalysisGeneratedResponse, p.cache_key)
+        return _validate_and_return(result, GapAnalysisResponse, p.cache_key)
     except Exception as e:
         logger.error(f"Error in analyze_gaps_task for {p.reference_id}: {str(e)}")
         raise self.retry(exc=e)

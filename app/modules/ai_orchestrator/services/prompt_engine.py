@@ -3,9 +3,15 @@ from app.modules.ai_orchestrator.schemas import (
     LearningContextDTO,
     PersonalizedQuizContext,
     TopicContext,
+    GapAnalysisContext,
 )
 
-PROMPT_VERSIONS = {"quiz": "v2", "gap_analysis": "v1", "content_expansion": "v1", "answer_explanation": "v1"}
+PROMPT_VERSIONS = {
+    "quiz": "v2",
+    "gap_analysis": "v1",
+    "content_expansion": "v1",
+    "answer_explanation": "v1",
+}
 
 
 def _truncate(text: str, max_length: int = 100) -> str:
@@ -123,33 +129,30 @@ def build_personalized_quiz_prompt(
 
 
 def build_gap_analysis_prompt(
-    context: TopicContext, learning_context: LearningContextDTO
+    context: GapAnalysisContext, learning_context: LearningContextDTO
 ) -> tuple[str, str]:
     """
-    Builds the system and user prompts for gap analysis.
+    Builds the system and user prompts for a single gap analysis.
     """
     historical_context = _format_historical_context(context)
     system_prompt = (
-        "You are an AI tutor analyzing student errors. "
-        "Output a strictly valid JSON object with a 'concept_gaps' array. "
-        "Each gap object must have: "
-        "'concept' (string, the core topic they are failing at), "
-        "'explanation' (string, brief explanation of why they might be confused), "
-        "'severity' (string: 'low', 'medium', or 'high').\n"
-        "LANGUAGE RULE: ALL text fields in your JSON response (concept, explanation) MUST be written in Spanish.\n\n"
+        "You are an AI tutor analyzing a specific student misunderstanding. "
+        "Output a strictly valid JSON object representing the concept gap directly. "
+        "The object must have exactly these three fields: "
+        "'concept' (string, the concept name being analyzed), "
+        "'explanation' (string, why the student might be confused about this specific point), "
+        "'severity' (string: 'bajo', 'medio', or 'alto').\n"
+        "LANGUAGE RULE: ALL text fields in your JSON response MUST be written in Spanish.\n\n"
         f"{historical_context}"
     )
+
     user_prompt = (
-        "Based on the historical context, analyze the following pre-identified concept gaps for the student. "
-        f"Provide a brief explanation and severity for each gap related to the topic: {context.topic_name}.\n"
+        f"Analyze the following specific concept gap for the student: {context.target_concept}.\n"
+        f"Provide a brief explanation and severity for this gap related to the topic: {context.topic_name}.\n"
     )
-    user_prompt = _append_learning_context(
-        base_prompt=user_prompt,
-        learning_context=learning_context,
-        level_instruction="",
-        gaps_intro="Identified Concept Gaps (You MUST ONLY analyze these exact concepts):",
-        gaps_rule="CRITICAL: Your output 'concept_gaps' array must contain EXACTLY the concepts listed above. Do not invent new concepts or omit any. Provide an explanation and severity for each of these specific gaps.",
-    )
+
+    user_prompt += "\n**Target Audience Profile:**\n"
+    user_prompt += f"- User Level: {learning_context.user_level} (Adjust language complexity accordingly)\n"
 
     print("\n" + "=" * 50)
     print("=== GAP ANALYSIS PROMPTS ===")
@@ -220,8 +223,8 @@ def build_answer_explanation_prompt(
     user_prompt = (
         f"Topic: {context.topic_name}\n"
         f"Question: {context.question}\n"
-        f"The student selected: \"{context.user_answer}\"\n"
-        f"The correct answer is: \"{context.correct_answer}\"\n\n"
+        f'The student selected: "{context.user_answer}"\n'
+        f'The correct answer is: "{context.correct_answer}"\n\n'
         "Please explain why the student's answer is wrong and help them understand the correct one."
     )
 

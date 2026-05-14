@@ -35,6 +35,7 @@ from app.modules.ai_orchestrator.schemas import (
     TopicContext,
     HistoricalEvent,
     HistoricalFigure,
+    GapAnalysisContext,
 )
 from app.modules.ai_orchestrator.service import AIOrchestratorService
 from app.modules.ai_orchestrator.services.prompt_engine import (
@@ -95,6 +96,17 @@ def _quiz_ctx() -> PersonalizedQuizContext:
     )
 
 
+def _gap_analysis_ctx() -> GapAnalysisContext:
+    return GapAnalysisContext(
+        topic_name="The Crusades",
+        topic_description="Medieval military campaigns.",
+        period_name="Middle Ages",
+        events=[],
+        figures=[],
+        target_concept="Feudalism",
+    )
+
+
 @pytest.fixture
 def app_client() -> TestClient:
     app = FastAPI()
@@ -127,7 +139,12 @@ def raw_client() -> TestClient:
 class TestAITaskRegistry:
     def test_registered_tasks_contain_all_types(self):
         """All four task types must be discoverable after module load."""
-        for task_type in ("quiz_generation", "gap_analysis", "content_expansion", "answer_explanation"):
+        for task_type in (
+            "quiz_generation",
+            "gap_analysis",
+            "content_expansion",
+            "answer_explanation",
+        ):
             task = AITaskRegistry.get_task(task_type)
             assert callable(task)
 
@@ -212,14 +229,14 @@ class TestPromptBuilders:
 
     def test_build_gap_analysis_prompt_returns_two_strings(self):
         system_p, user_p = build_gap_analysis_prompt(
-            _topic_ctx(), _learning_ctx(["Feudalism"])
+            _gap_analysis_ctx(), _learning_ctx(["Feudalism"])
         )
         assert isinstance(system_p, str) and len(system_p) > 0
         assert isinstance(user_p, str) and len(user_p) > 0
 
     def test_build_gap_analysis_prompt_includes_gap(self):
         _, user_p = build_gap_analysis_prompt(
-            _topic_ctx(), _learning_ctx(["Feudalism"])
+            _gap_analysis_ctx(), _learning_ctx(["Feudalism"])
         )
         assert "Feudalism" in user_p
 
@@ -251,48 +268,15 @@ class TestAnalyzeGapsTaskLogic:
             "period_name": "Middle Ages",
             "events": [],
             "figures": [],
+            "target_concept": "Feudalism",
         }
 
-    def test_no_gaps_returns_empty_concept_gaps(self, monkeypatch):
-        """When concept_gaps is empty, the task must short-circuit without calling the LLM."""
-        monkeypatch.setattr(
-            "app.modules.ai_orchestrator.tasks.get_redis_cache",
-            lambda: MagicMock(setex=MagicMock()),
-        )
-        # Ensure LLM is never called
-        llm_mock = MagicMock(
-            side_effect=AssertionError("LLM should NOT be called when no gaps")
-        )
-        monkeypatch.setattr(
-            "app.modules.ai_orchestrator.tasks.generate_structured_json",
-            llm_mock,
-        )
-
-        from app.modules.ai_orchestrator.tasks import analyze_gaps_task
-
-        payload = AITaskPayload(
-            reference_id=TOPIC_ID,
-            user_id=USER_ID,
-            context=self._context(),
-            learning_context={"user_level": 2, "concept_gaps": []},
-            cache_key="",
-        )
-        result = analyze_gaps_task.apply(args=[payload.model_dump()])
-
-        assert result.successful()
-        assert result.result["concept_gaps"] == []
-        llm_mock.assert_not_called()
-
     def test_with_gaps_calls_llm_and_returns_validated_result(self, monkeypatch):
-        """When concept_gaps exist, the LLM must be called and the result validated."""
+        """When the task is called, the LLM must be called and the result validated."""
         fake_llm_result = {
-            "concept_gaps": [
-                {
-                    "concept": "Feudalism",
-                    "explanation": "Student confuses feudal hierarchy.",
-                    "severity": "medium",
-                }
-            ]
+            "concept": "Feudalism",
+            "explanation": "Student confuses feudal hierarchy.",
+            "severity": "medio",
         }
         monkeypatch.setattr(
             "app.modules.ai_orchestrator.tasks.generate_structured_json",
@@ -316,9 +300,8 @@ class TestAnalyzeGapsTaskLogic:
 
         assert result.successful()
         data = result.result
-        assert len(data["concept_gaps"]) == 1
-        assert data["concept_gaps"][0]["concept"] == "Feudalism"
-        assert data["concept_gaps"][0]["severity"] == "medium"
+        assert data["concept"] == "Feudalism"
+        assert data["severity"] == "medio"
 
     def test_llm_error_marks_task_as_failed(self, monkeypatch):
         """If the LLM call raises an exception, the task must fail (not crash silently)."""
