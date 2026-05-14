@@ -371,8 +371,9 @@ def _update_topic_progress(db: Session, user_id: UUID, topic_id: UUID, xp_gained
 
     topic_progress.xp_earned += xp_gained
     topic_progress.last_studied_at = datetime.now(timezone.utc)
+    # If the session is marked completed, consider the topic completed (one quiz per topic)
     if completed:
-        topic_progress.completion_percentage = min(100.0, topic_progress.completion_percentage + 10.0)
+        topic_progress.completion_percentage = 100.0
 
 
 
