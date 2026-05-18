@@ -1,0 +1,49 @@
+name: Trigger auto deployment for timequest-api
+
+# When this action will be executed
+on:
+  # Automatically trigger it when detected changes in repo
+  push:
+    branches: 
+      [ main ]
+    paths:
+    - '**'
+    - '.github/workflows/timequest-api-AutoDeployTrigger-aeb6d9c2-728f-42cf-b73b-04ccf83bed2b.yml'
+
+  # Allow manual trigger 
+  workflow_dispatch:      
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions: 
+      id-token: write #This is required for requesting the OIDC JWT Token
+      contents: read #Required when GH token is used to authenticate with private repo
+
+    steps:
+      - name: Checkout to the branch
+        uses: actions/checkout@v2
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.TIMEQUESTAPI_AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.TIMEQUESTAPI_AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.TIMEQUESTAPI_AZURE_SUBSCRIPTION_ID }}
+
+      - name: Build and push container image to registry
+        uses: azure/container-apps-deploy-action@v2
+        with:
+          appSourcePath: ${{ github.workspace }}
+          _dockerfilePathKey_: _dockerfilePath_
+          _targetLabelKey_: _targetLabel_
+          registryUrl: ecitimequestregistry.azurecr.io
+          registryUsername: ${{ secrets.TIMEQUESTAPI_REGISTRY_USERNAME }}
+          registryPassword: ${{ secrets.TIMEQUESTAPI_REGISTRY_PASSWORD }}
+          containerAppName: timequest-api
+          resourceGroup: ecitimequest-rg
+          imageToBuild: ecitimequestregistry.azurecr.io/timequest-api:${{ github.sha }}
+          _buildArgumentsKey_: |
+            _buildArgumentsValues_
+
+
